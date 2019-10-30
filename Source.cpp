@@ -57,7 +57,7 @@ matrix sub_matrix(matrix& m, int startRow, int endRow, int startCol, int endCol)
 		subMat.push_back(std::vector<int>());
 		for (size_t j = startCol; j < endCol; j++)
 		{
-			subMat[subMat.size()-1].push_back(m[i][j]);
+			subMat[subMat.size() - 1].push_back(m[i][j]);
 		}
 	}
 
@@ -86,10 +86,10 @@ void app_row(matrix& dst, matrix& m) {
 }
 
 matrix merge_matrices(std::vector<matrix> matrices, int colappBreaker) {
-	
+
 	matrix merged;
 	matrix b;
-	
+
 	int i = 0;
 	for (matrix m : matrices) {
 		if (i == colappBreaker) {
@@ -97,7 +97,7 @@ matrix merge_matrices(std::vector<matrix> matrices, int colappBreaker) {
 			b = matrix();
 			i = 0;
 		}
-		
+
 		app_col(b, m);
 
 		i++;
@@ -108,15 +108,20 @@ matrix merge_matrices(std::vector<matrix> matrices, int colappBreaker) {
 	return merged;
 }
 
-//
-//we will expect the matresses to be nxm with 2|n and m, and m*n is possible
-matrix multMultiThread(matrix& m1, matrix& m2) {
+matrix matmul(matrix& m1, matrix& m2) {
+	return m1 * m2;
+}
 
+// it is advised to use a number for threads that fulfills sqrt(threads) elemnt N
+// we will expect the matresses to be nxm with 2|n and m, and m*n is possible
+matrix multMultiThread(matrix& m1, matrix& m2, unsigned int threads) {
+
+#ifdef STATIC_4_T
 	matrix	r1 = sub_matrix(m1, 0, m1.size() / 2, 0, m1[0].size()),
-			r2 = sub_matrix(m1, m1.size() / 2, m1.size(), 0, m1[0].size());
+		r2 = sub_matrix(m1, m1.size() / 2, m1.size(), 0, m1[0].size());
 
 	matrix	l1 = sub_matrix(m2, 0, m2.size(), 0, m2[0].size() / 2),
-			l2 = sub_matrix(m2, 0, m2.size(), m2[0].size() / 2, m2[0].size());
+		l2 = sub_matrix(m2, 0, m2.size(), m2[0].size() / 2, m2[0].size());
 
 	auto f1 = std::async([&]() {return r1 * l1; });
 	auto f2 = std::async([&]() {return r1 * l2; });
@@ -125,7 +130,39 @@ matrix multMultiThread(matrix& m1, matrix& m2) {
 
 	std::vector<matrix> mx = { f1.get(), f2.get(), f3.get(), f4.get() };
 
-	auto res = merge_matrices(mx, 2);
+	int splits = 2;
+#elif !STATIC_4_T
+
+	int splits = sqrt(threads);
+
+	std::vector<matrix> r, l;
+
+	//split matrices
+	for (size_t i = 0; i < splits; i++)
+	{
+		r.push_back(sub_matrix(m1, i * (m1.size() / splits), (i + 1) * (m1.size() / splits), 0, m1[0].size()));
+		l.push_back(sub_matrix(m2, 0, m2.size(), i * (m2[0].size() / splits), (i + 1) * (m2[0].size() / splits)));
+	}
+
+	std::vector<std::future<matrix>> fs;
+	//spawn threads via std::async, mainly used because it returns a future wich offers a syncronasation point
+	for (size_t i = 0; i < splits; i++)
+	{
+		for (size_t j = 0; j < splits; j++)
+		{
+			fs.push_back(std::async([&, i, j]() {return r.at(i) * l.at(j); }));
+		}
+	}
+
+	std::vector<matrix> mx;
+	//wait for all thread to finish
+	//wait is made so that the matrices are also in correct order
+	for (size_t i = 0; i < threads; i++)
+	{
+		mx.push_back(fs[i].get());
+	}
+#endif
+	auto res = merge_matrices(mx, splits);
 
 	return res;
 }
@@ -140,8 +177,6 @@ void init_random_sqare_matrix(matrix& m, unsigned int size) {
 		}
 	}
 }
-
-int msecs = 0;
 
 void printm_in_file(const char* name, matrix& m) {
 	std::fstream f;
@@ -160,28 +195,22 @@ void printm_in_file(const char* name, matrix& m) {
 
 int main() {
 	matrix m1, m2;
-	init_random_sqare_matrix(m1, 2000);
-	init_random_sqare_matrix(m2, 2000);
+	init_random_sqare_matrix(m1, 3000);
+	init_random_sqare_matrix(m2, 3000);
 
-	std::promise<bool> p;
+	auto startTime = std::chrono::system_clock::now();
 
-	std::thread t([&]()->void {
-		auto f = p.get_future();
-		while (f.wait_for(std::chrono::milliseconds(1)) == std::future_status::timeout) {
-			msecs++;
-		}});
+	auto r = multMultiThread(m1, m2, 1);
 
-	auto r = multMultiThread(m1, m2);
+	auto endTime = std::chrono::system_clock::now();
 
-	p.set_value(true);
+	std::chrono::duration<double> elapsedSecs = endTime - startTime;
 
-	t.join();
-
-	std::cout << msecs;
+	std::cout << "calculation done in: " << elapsedSecs.count() << "seconds" << std::endl;
 
 	printm_in_file("result.txt", r);
 
-	std::cout << "done";
+	std::cout << "result written in file";
 
 	std::cin.get();
 }
